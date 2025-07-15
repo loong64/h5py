@@ -1,0 +1,94 @@
+name: build (h5py)
+
+on:
+  # Run daily at 1:23 UTC to upload nightly wheels to Anaconda Cloud
+  schedule:
+    - cron: '23 1 * * *'
+  # Run on demand with workflow dispatch
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  
+  build_wheels:
+    name: 'Wheels: ${{ matrix.os }} ${{ matrix.arch }}'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: loongarch64
+
+    steps:
+      - name: Check version
+        run: |
+          version=$(curl -s "https://api.github.com/repos/h5py/h5py/releases/latest" | jq -r .tag_name)
+          if [ -z "${version}" ] || [ "${version}" == "null" ]; then
+            echo "Failed to get version"
+            exit 1
+          fi
+
+          echo "PIP_EXTRA_INDEX_URL=https://gitlab.com/api/v4/projects/65746188/packages/pypi/simple" >> $GITHUB_ENV
+
+          echo "version=${version}" >> $GITHUB_ENV
+          echo ""
+          echo "========== Build Args =========="
+          echo "h5py version: ${version}"
+
+          gh release view ${version} -R ${{ github.repository }} | grep h5py-.*.whl >/dev/null 2>&1 || echo "build=1" >> $GITHUB_ENV
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/checkout@v4
+        if: env.build == '1'
+        with:
+          repository: h5py/h5py
+          ref: ${{ env.version}}
+          fetch-depth: 0  # get the non-merge commit for PRs
+
+      - name: Setup QEMU
+        if: env.build == '1'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: env.build == '1'
+        uses: docker/setup-buildx-action@v3
+
+      # Now actually build the wheels
+      - uses: loong64/cibuildwheel@v3.0.1
+        if: env.build == '1'
+        env:
+          # Note that tool.cibuildwheel "skip" in pyproject.toml also limits what gets built
+          CIBW_ARCHS: "${{ matrix.arch }}"
+          CIBW_SKIP: "*musllinux*"
+          CIBW_ENVIRONMENT_PASS_LINUX: PIP_EXTRA_INDEX_URL
+          CIBW_MANYLINUX_LOONGARCH64_IMAGE: ghcr.io/loong64/manylinux_2_38_loongarch64-hdf5:latest
+          # coverage.exceptions.CoverageWarning: Couldn't import C tracer: No module named 'coverage.tracer' (no-ctracer)
+          CIBW_TEST_SKIP: "*"
+
+      - name: Upload wheels
+        if: env.build == '1'
+        run: |
+          pip install twine==6.0.1
+          for file in wheelhouse/*.whl; do
+            twine upload --repository-url https://gitlab.com/api/v4/projects/65746188/packages/pypi $file || true
+          done
+        env:
+          TWINE_USERNAME: ${{ github.repository_owner }}
+          TWINE_PASSWORD: ${{ secrets.GL_TOKEN }}
+
+      - name: Upload to GitHub releases
+        if: env.build == '1'
+        uses: softprops/action-gh-release@v2
+        # https://github.com/softprops/action-gh-release?tab=readme-ov-file#inputs
+        with:
+          repository: ${{ github.repository }}
+          name: ${{ env.version }}
+          tag_name: ${{ env.version }}
+          files: |
+            wheelhouse/*.whl
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
