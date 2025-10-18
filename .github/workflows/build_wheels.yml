@@ -42,7 +42,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         if: env.build == '1'
         with:
           repository: h5py/h5py
@@ -58,11 +58,12 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       # Now actually build the wheels
-      - uses: loong64/cibuildwheel@v3.0.1
+      - uses: loong64/cibuildwheel@v3.2.1
         if: env.build == '1'
         env:
           # Note that tool.cibuildwheel "skip" in pyproject.toml also limits what gets built
           CIBW_ARCHS: "${{ matrix.arch }}"
+          CIBW_BUILD_FRONTEND: 'pip; args: --no-build-isolation'
           CIBW_SKIP: "*musllinux*"
           CIBW_ENVIRONMENT_PASS_LINUX: PIP_EXTRA_INDEX_URL
           CIBW_MANYLINUX_LOONGARCH64_IMAGE: ghcr.io/loong64/manylinux_2_38_loongarch64-hdf5:latest
